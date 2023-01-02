@@ -296,8 +296,8 @@ fit_grn_models.SeuratPlus <- function(
         # Select TFs with motifs in peaks
         gene_peak_tfs <- map(rownames(peak_motifs), function(p){
             x <- as.logical(peak_motifs[p, ])
-            peak_tfs <- colMaxs(motif2tf[x, , drop=FALSE])
-            peak_tfs <- colnames(motif2tf)[as.logical(peak_tfs)]
+            peak_tfs <- motif2tf
+            peak_tfs <- names(motif2tf)[as.logical(peak_tfs)]
             peak_tfs <- setdiff(peak_tfs, g)
             return(peak_tfs)
         })
