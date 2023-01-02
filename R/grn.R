@@ -252,10 +252,9 @@ fit_grn_models.SeuratPlus <- function(
 
     # Select peaks passing criteria
     peaks_at_gene <- as.logical(colMaxs(peaks2gene))
-    peaks_with_motif <- as.logical(rowMaxs(peaks2motif*1))
 
     # Subset data to good peaks
-    peaks_use <- peaks_at_gene & peaks_with_motif
+    peaks_use <- peaks_at_gene
     peaks2gene <- peaks2gene[, peaks_use, drop=FALSE]
     peaks2motif <- peaks2motif[peaks_use, , drop=FALSE]
     peak_data <- peak_data[, peaks_use, drop=FALSE]
@@ -308,7 +307,7 @@ fit_grn_models.SeuratPlus <- function(
         gene_tfs <- purrr::reduce(gene_peak_tfs, union)
         tf_x <- gene_data[gene_groups, gene_tfs, drop=FALSE]
         tf_g_cor <- as(sparse_cor(tf_x, g_x), 'generalMatrix')
-        tf_g_cor[is.na(tf_g_cor)] <- 0
+        attr(tf_g_cor,"tf_g_cor")[is.na(attr(tf_g_cor,"tf_g_cor"))] <- 0
         tfs_use <- rownames(tf_g_cor)[abs(tf_g_cor[, 1]) > tf_cor]
         if (length(tfs_use)==0){
             log_message('Warning: No correlating TFs found for ', g, verbose=verbose==2)
@@ -350,7 +349,7 @@ fit_grn_models.SeuratPlus <- function(
         gene_tfs <- purrr::reduce(map(frml_string, function(x) x$tfs), union)
         gene_x <- gene_data[gene_groups, union(g, gene_tfs), drop=FALSE]
         model_mat <- as.data.frame(cbind(gene_x, peak_x))
-        if (scale) model_mat <- as.data.frame(scale(as.matrix(model_mat)))
+        if (scale) model_mat <- as.data.frame(scale(model.matrix(model_mat)))
         colnames(model_mat) <- str_replace_all(colnames(model_mat), '-', '_')
 
         log_message('Fitting model with ', nfeats, ' variables for ', g, verbose=verbose==2)
@@ -481,117 +480,117 @@ find_modules.Network <- function(
     xgb_top = 50,
     verbose = TRUE
 ){
-    fit_method <- NetworkParams(object)$method
-    xgb_method <- match.arg(xgb_method)
+  fit_method <- NetworkParams(object)$method
+  xgb_method <- match.arg(xgb_method)
 
-    if (!fit_method %in% c('glm', 'cv.glmnet', 'glmnet', 'brms', 'xgb')){
-        stop(paste0('find_modules() is not yet implemented for "', fit_method, '" models'))
-    }
+  if (!fit_method %in% c('glm', 'cv.glmnet', 'glmnet', 'brms', 'xgb')){
+    stop(paste0('find_modules() is not yet implemented for "', fit_method, '" models'))
+  }
 
-    models_use <- gof(object) %>%
-        filter(rsq>rsq_thresh & nvariables>nvar_thresh) %>%
-        pull(target) %>%
-        unique()
+  models_use <- gof(object) %>%
+    dplyr::filter(rsq>rsq_thresh & nvariables>nvar_thresh) %>%
+    pull(target) %>%
+    unique()
 
-    modules <- coef(object) %>%
-        filter(target %in% models_use)
+  modules <- coef(object) %>%
+    dplyr::filter(target %in% models_use)
 
-    if (fit_method %in% c('cv.glmnet', 'glmnet')){
-        modules <- modules %>%
-            filter(estimate != 0)
-    } else if (fit_method == 'xgb'){
-        modules <- modules %>%
-            group_by_at(xgb_method) %>%
-            top_n(xgb_top, gain) %>%
-            mutate(estimate=sign(corr)*gain)
-    } else {
-        modules <- modules %>%
-            filter(ifelse(is.na(padj), T, padj<p_thresh))
-    }
-
+  if (fit_method %in% c('cv.glmnet', 'glmnet')){
+      modules <- modules %>%
+      dplyr::filter(estimate != 0)
+  } else if (fit_method == 'xgb'){
     modules <- modules %>%
-        group_by(target) %>%
-        mutate(nvars=n()) %>%
-        group_by(target, tf) %>%
-        mutate(tf_sites_per_gene=n()) %>%
-        group_by(target) %>%
-        mutate(
-            tf_per_gene=length(unique(tf)),
-            peak_per_gene=length(unique(region))
-        ) %>%
-        group_by(tf) %>%
-        mutate(gene_per_tf=length(unique(target))) %>%
-        group_by(target, tf)
-
-    if (fit_method %in% c('cv.glmnet', 'glmnet', 'xgb')){
-        modules <- modules %>%
-            summarize(
-                estimate=sum(estimate),
-                n_regions=peak_per_gene,
-                n_genes=gene_per_tf,
-                n_tfs=tf_per_gene,
-                regions=paste(region, collapse=';')
-            )
-    } else {
-        modules <- modules %>%
-            summarize(
-                estimate=sum(estimate),
-                n_regions=peak_per_gene,
-                n_genes=gene_per_tf,
-                n_tfs=tf_per_gene,
-                regions=paste(region, collapse=';'),
-                pval=min(pval),
-                padj=min(padj)
-            )
-    }
-
+    group_by_at(xgb_method) %>%
+      top_n(xgb_top, gain) %>%
+      mutate(estimate=sign(corr)*gain)
+  } else {
     modules <- modules %>%
-        distinct() %>%
-        arrange(tf)
+      dplyr::filter(ifelse(is.na(padj), T, padj<p_thresh))
+  }
 
-    module_pos <- modules %>%
-        filter(estimate>0) %>%
-        group_by(tf) %>% filter(n()>min_genes_per_module) %>%
-        group_split() %>% {names(.) <- map_chr(., function(x) x$tf[[1]]); .} %>%
-        map(function(x) x$target)
+  modules <- modules %>%
+    group_by(target) %>%
+    mutate(nvars=n()) %>%
+    group_by(target, tf) %>%
+    mutate(tf_sites_per_gene=n()) %>%
+    group_by(target) %>%
+    mutate(
+      tf_per_gene=length(unique(tf)),
+      peak_per_gene=length(unique(region))
+    ) %>%
+    group_by(tf) %>%
+    mutate(gene_per_tf=length(unique(target))) %>%
+    group_by(target, tf)
 
-    module_neg <- modules %>%
-        filter(estimate<0) %>%
-        group_by(tf) %>% filter(n()>min_genes_per_module) %>%
-        group_split() %>% {names(.) <- map_chr(., function(x) x$tf[[1]]); .} %>%
-        map(function(x) x$target)
+  if (fit_method %in% c('cv.glmnet', 'glmnet', 'xgb')){
+    modules <- modules %>%
+      summarize(
+        estimate=sum(estimate),
+        n_regions=peak_per_gene,
+        n_genes=gene_per_tf,
+        n_tfs=tf_per_gene,
+        regions=paste(region, collapse=';')
+      )
+  } else {
+    modules <- modules %>%
+      summarize(
+        estimate=sum(estimate),
+        n_regions=peak_per_gene,
+        n_genes=gene_per_tf,
+        n_tfs=tf_per_gene,
+        regions=paste(region, collapse=';'),
+        pval=min(pval),
+        padj=min(padj)
+      )
+  }
 
-    regions_pos <- modules %>%
-        filter(estimate>0) %>%
-        group_by(tf) %>% filter(n()>min_genes_per_module) %>%
-        group_split() %>% {names(.) <- map_chr(., function(x) x$tf[[1]]); .} %>%
-        map(function(x) unlist(str_split(x$regions, ';')))
+  modules <- modules %>%
+    distinct() %>%
+    arrange(tf)
 
-    regions_neg <- modules %>%
-        filter(estimate<0) %>%
-        group_by(tf) %>% filter(n()>min_genes_per_module) %>%
-        group_split() %>% {names(.) <- map_chr(., function(x) x$tf[[1]]); .} %>%
-        map(function(x) unlist(str_split(x$regions, ';')))
+  module_pos <- modules %>%
+    dplyr::filter(estimate>0) %>%
+    group_by(tf) %>% dplyr::filter(n()>min_genes_per_module) %>%
+    group_split() %>% {names(.) <- map_chr(., function(x) x$tf[[1]]); .} %>%
+    map(function(x) x$target)
 
-    module_feats <- list(
-        'genes_pos' = module_pos,
-        'genes_neg' = module_neg,
-        'regions_pos' = regions_pos,
-        'regions_neg' = regions_neg
-    )
+  module_neg <- modules %>%
+    dplyr::filter(estimate<0) %>%
+    group_by(tf) %>% dplyr::filter(n()>min_genes_per_module) %>%
+    group_split() %>% {names(.) <- map_chr(., function(x) x$tf[[1]]); .} %>%
+    map(function(x) x$target)
 
-    log_message(paste0('Found ', length(unique(modules$tf)),' TF modules'), verbose=verbose)
+  regions_pos <- modules %>%
+    dplyr::filter(estimate>0) %>%
+    group_by(tf) %>% dplyr::filter(n()>min_genes_per_module) %>%
+    group_split() %>% {names(.) <- map_chr(., function(x) x$tf[[1]]); .} %>%
+    map(function(x) unlist(str_split(x$regions, ';')))
 
-    module_meta <- select(modules, tf, target, everything())
-    object@modules@meta <- module_meta
-    object@modules@features <- module_feats
-    object@modules@params <- list(
-        p_thresh = p_thresh,
-        rsq_thresh = rsq_thresh,
-        nvar_thresh = nvar_thresh,
-        min_genes_per_module = min_genes_per_module
-    )
-    return(object)
+  regions_neg <- modules %>%
+    dplyr::filter(estimate<0) %>%
+    group_by(tf) %>% dplyr::filter(n()>min_genes_per_module) %>%
+    group_split() %>% {names(.) <- map_chr(., function(x) x$tf[[1]]); .} %>%
+    map(function(x) unlist(str_split(x$regions, ';')))
+
+  module_feats <- list(
+    'genes_pos' = module_pos,
+    'genes_neg' = module_neg,
+    'regions_pos' = regions_pos,
+    'regions_neg' = regions_neg
+  )
+
+  log_message(paste0('Found ', length(unique(modules$tf)),' TF modules'), verbose=verbose)
+
+  module_meta <- dplyr::select(modules, tf, target, everything())
+  object@modules@meta <- module_meta
+  object@modules@features <- module_feats
+  object@modules@params <- list(
+    p_thresh = p_thresh,
+    rsq_thresh = rsq_thresh,
+    nvar_thresh = nvar_thresh,
+    min_genes_per_module = min_genes_per_module
+  )
+  return(object)
 }
 
 
